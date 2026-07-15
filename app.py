@@ -6,9 +6,12 @@ from huggingface_hub import hf_hub_download
 from llama_cpp import Llama
 
 # --- Configuration ---
-REPO_ID = "microsoft/Phi-3-mini-4k-instruct-gguf"
-FILENAME = "Phi-3-mini-4k-instruct-q4.gguf"
+# Trocado de Phi-3-mini (3.8B) para Qwen2.5-1.5B-Instruct: ~2.5x menor,
+# multilíngue com suporte declarado a português, e mais leve para CPU de 2 cores.
+REPO_ID = "Qwen/Qwen2.5-1.5B-Instruct-GGUF"
+FILENAME = "qwen2.5-1.5b-instruct-q4_k_m.gguf"
 CONTEXT_SIZE = 1024
+MAX_RESPONSE_TOKENS = 300  # reduzido de 500: corta a cauda longa de tempo total
 
 # System prompt fixo: mantém o modelo respondendo em PT-BR e reforça o uso
 # do histórico da conversa (o modelo pequeno tende a "esquecer" contexto).
@@ -29,8 +32,10 @@ def load_model():
         llm = Llama(
             model_path=model_path,
             n_ctx=CONTEXT_SIZE,
-            n_threads=2,   # Codespace tem só 2 cores (nproc=2) - manter em 2
-            n_batch=128,   # revertido: 256 piorou o throughput (overhead sem ganho com só 2 threads)
+            n_threads=2,         # Codespace tem só 2 cores (nproc=2) - manter em 2
+            n_threads_batch=2,   # garante que o prefill do prompt também usa os 2 cores
+            n_batch=128,         # 256 piorou o throughput (overhead sem ganho com só 2 threads)
+            use_mlock=True,      # trava o modelo em RAM, evita swap e picos de latência
             verbose=False
         )
 
@@ -56,7 +61,7 @@ def get_memory_usage(ttft=None, total_time=None, tokens=None):
     """Monitora o consumo de RAM (RSS) e, opcionalmente, métricas de tempo/velocidade."""
     process = psutil.Process(os.getpid())
     ram_mb = process.memory_info().rss / (1024 * 1024)
-    base = f" **RAM Usage:** `{ram_mb:.2f} MB` |  **Model:** `Phi-3-Mini (Q4)` |  **Compute:** `CPU Edge`"
+    base = f" **RAM Usage:** `{ram_mb:.2f} MB` |  **Model:** `Qwen2.5-1.5B (Q4)` |  **Compute:** `CPU Edge`"
 
     if ttft is not None:
         base += f" |  **1º token:** `{ttft:.2f}s`"
@@ -80,14 +85,14 @@ def generate_response(user_message, chat_history):
     chat_history.append({"role": "assistant", "content": ""})
     yield chat_history, get_memory_usage()
 
-    # Prepara o prompt no formato ChatML exigido pelo Phi-3
+    # Prepara o prompt no formato de chat exigido pelo modelo
     # (usa o histórico inteiro, exceto o placeholder vazio recém-adicionado)
     # Sanitiza: o Gradio pode devolver 'content' como lista/estrutura em vez de
     # string pura (ex: mensagens já renderizadas com markdown), e o llama-cpp-python
     # quebra se 'content' não for string. Forçamos a conversão aqui.
-    # O chat template deste GGUF (Phi-3-mini-4k-instruct-q4.gguf) NÃO trata a
-    # role "system" corretamente - ela é ignorada na formatação do prompt.
-    # Workaround: embutir a instrução dentro da primeira mensagem do usuário.
+    # Alguns chat templates de GGUF não tratam bem a role "system" (ex: o Phi-3
+    # usado antes a ignorava). Por segurança, mantemos o workaround de embutir
+    # a instrução na primeira mensagem do usuário em vez de usar role="system".
     messages = []
     system_injected = False
     for m in chat_history[:-1]:
@@ -110,7 +115,7 @@ def generate_response(user_message, chat_history):
 
         stream = llm.create_chat_completion(
             messages=messages,
-            max_tokens=500,
+            max_tokens=MAX_RESPONSE_TOKENS,
             temperature=0.1,
             stream=True
         )

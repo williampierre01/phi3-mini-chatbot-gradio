@@ -1,5 +1,5 @@
 """
-Benchmark automatizado para o Phi-3-mini-chatbot-gradio.
+Benchmark automatizado para o chatbot-gradio local.
 
 Roda uma bateria de perguntas de teste diretamente no modelo (sem precisar
 da interface Gradio), medindo tempo até o primeiro token (TTFT), tempo
@@ -9,6 +9,7 @@ para análise posterior.
 Uso:
     python benchmark.py
     python benchmark.py --output resultados.csv
+    python benchmark.py --sweep-batch          # testa vários valores de n_batch
 """
 
 import argparse
@@ -21,9 +22,12 @@ from huggingface_hub import hf_hub_download
 from llama_cpp import Llama
 
 # --- Configuração (mesma do app.py) ---
-REPO_ID = "microsoft/Phi-3-mini-4k-instruct-gguf"
-FILENAME = "Phi-3-mini-4k-instruct-q4.gguf"
+# Trocado de Phi-3-mini (3.8B) para Qwen2.5-1.5B-Instruct: ~2.5x menor,
+# multilíngue com suporte declarado a português, e mais leve para CPU de 2 cores.
+REPO_ID = "Qwen/Qwen2.5-1.5B-Instruct-GGUF"
+FILENAME = "qwen2.5-1.5b-instruct-q4_k_m.gguf"
 CONTEXT_SIZE = 1024
+MAX_RESPONSE_TOKENS = 300  # reduzido de 500: corta a cauda longa de tempo total
 
 SYSTEM_PROMPT = (
     "Você é um assistente virtual que responde SEMPRE em português do Brasil, "
@@ -108,15 +112,17 @@ TEST_CASES = [
 ]
 
 
-def load_model():
+def load_model(n_batch=128):
     print(f"[*] Verificando cache ou baixando {FILENAME}...")
     model_path = hf_hub_download(repo_id=REPO_ID, filename=FILENAME)
-    print("[*] Carregando modelo via llama.cpp (Edge CPU Mode)...")
+    print(f"[*] Carregando modelo via llama.cpp (Edge CPU Mode, n_batch={n_batch})...")
     llm = Llama(
         model_path=model_path,
         n_ctx=CONTEXT_SIZE,
-        n_threads=2,   # Codespace tem só 2 cores (nproc=2) - manter em 2
-        n_batch=128,   # revertido: 256 piorou o throughput (overhead sem ganho com só 2 threads)
+        n_threads=2,         # Codespace tem só 2 cores (nproc=2) - manter em 2
+        n_threads_batch=2,   # garante que o prefill do prompt também usa os 2 cores
+        n_batch=n_batch,
+        use_mlock=True,      # trava o modelo em RAM, evita swap e picos de latência
         verbose=False,
     )
 
@@ -136,7 +142,7 @@ def get_ram_mb():
     return process.memory_info().rss / (1024 * 1024)
 
 
-def run_turn(llm, messages, max_tokens=500, temperature=0.1):
+def run_turn(llm, messages, max_tokens=MAX_RESPONSE_TOKENS, temperature=0.1):
     """Executa uma chamada de streaming e mede as métricas de performance."""
     start_time = time.time()
     first_token_time = None
@@ -217,6 +223,38 @@ def run_benchmark(llm, test_cases):
     return records
 
 
+def run_batch_sweep(batch_values, prompt=None):
+    """Recarrega o modelo com diferentes valores de n_batch e mede o impacto
+    no TTFT/velocidade, usando um único prompt representativo (o mais longo
+    da bateria, que estressa o prefill)."""
+    if prompt is None:
+        # usa o prompt mais longo (context_limit) como referência, já que é
+        # o que mais evidencia o custo de prefill/batch
+        prompt = next(c["turns"][0] for c in TEST_CASES if c["id"] == "context_limit")
+
+    sweep_records = []
+    for n_batch in batch_values:
+        print(f"\n{'='*70}\nTestando n_batch={n_batch}\n{'='*70}")
+        llm = load_model(n_batch=n_batch)
+        messages = [{"role": "user", "content": f"{SYSTEM_PROMPT}\n\n{prompt}"}]
+        result = run_turn(llm, messages)
+        sweep_records.append({
+            "n_batch": n_batch,
+            "ttft_s": round(result["ttft"], 3),
+            "total_time_s": round(result["total_time"], 3),
+            "tokens": result["tokens"],
+            "tokens_per_sec": round(result["tokens_per_sec"], 2),
+        })
+        print(
+            f"  -> TTFT: {sweep_records[-1]['ttft_s']}s | "
+            f"Total: {sweep_records[-1]['total_time_s']}s | "
+            f"{sweep_records[-1]['tokens_per_sec']} tok/s"
+        )
+        del llm  # libera RAM antes de recarregar com o próximo valor
+
+    return sweep_records
+
+
 def save_csv(records, output_path):
     if not records:
         print("Nenhum resultado para salvar.")
@@ -246,11 +284,24 @@ def print_summary(records):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Benchmark do Phi-3-mini-chatbot")
+    parser = argparse.ArgumentParser(description="Benchmark do chatbot local")
     parser.add_argument(
         "--output", default="benchmark_results.csv", help="Arquivo CSV de saída"
     )
+    parser.add_argument(
+        "--sweep-batch",
+        action="store_true",
+        help="Em vez da bateria completa, testa vários valores de n_batch "
+             "(64, 128, 192, 256) no prompt mais longo, para achar o melhor.",
+    )
     args = parser.parse_args()
+
+    if args.sweep_batch:
+        print("\n[*] Iniciando sweep de n_batch...\n")
+        sweep_results = run_batch_sweep([64, 128, 192, 256])
+        sweep_output = args.output.replace(".csv", "_batch_sweep.csv")
+        save_csv(sweep_results, sweep_output)
+        raise SystemExit(0)
 
     llm = load_model()
     if not llm:
