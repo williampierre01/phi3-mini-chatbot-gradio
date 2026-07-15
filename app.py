@@ -21,7 +21,7 @@ def load_model():
             model_path=model_path,
             n_ctx=CONTEXT_SIZE,
             n_threads=2,
-            n_batch=256,
+            n_batch=128
             verbose=False # Mantém o terminal limpo
         )
         return llm
