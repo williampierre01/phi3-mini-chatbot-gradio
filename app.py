@@ -78,7 +78,7 @@ def generate_response(user_message, chat_history):
         yield chat_history, get_memory_usage()
 
 # --- Gradio UI (Full-Stack) ---
-with gr.Blocks(theme=gr.themes.Base()) as interface:
+with gr.Blocks() as interface:
     gr.Markdown("# 🛡️ Edge AI Chatbot (100% Local & Private)")
     
     # Barra de status do hardware
