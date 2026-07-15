@@ -1,8 +1,4 @@
-gradio
-transformers
-accelerate
-pandas
-flash_attn
-
-
-
+gradio>=4.40.0
+llama-cpp-python>=0.2.90
+huggingface-hub>=0.24.0
+psutil>=6.0.0

@@ -1,109 +1,117 @@
-
-#!pip install gradio
-#!pip install transformers>=4.41.2 accelerate>=0.31.0
-import torch
+import os
+import psutil
 import gradio as gr
-from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
-import time # Adicionar esta importação
+from huggingface_hub import hf_hub_download
+from llama_cpp import Llama
 
-time.sleep(60) # Adicionar um atraso de 5 segundos
-# Load model and tokenizer
-tokenizer = AutoTokenizer.from_pretrained("microsoft/Phi-3-mini-4k-instruct")
+# --- Configuration ---
+REPO_ID = "microsoft/Phi-3-mini-4k-instruct-gguf"
+FILENAME = "Phi-3-mini-4k-instruct-q4.gguf"
+CONTEXT_SIZE = 4096
 
-model = AutoModelForCausalLM.from_pretrained(
-    "microsoft/Phi-3-mini-4k-instruct",
-    device_map="auto",
-    torch_dtype="auto",
-    trust_remote_code=False,
-)
-
-# Create a pipeline
-generator = pipeline(
-    "text-generation",
-    model=model,
-    tokenizer=tokenizer,
-    return_full_text=False,
-    max_new_tokens=50,
-    do_sample=False,
-)
-generation_args = { 
-    "max_new_tokens": 500, 
-    "return_full_text": False, 
-    "temperature": 0.0, 
-    "do_sample": False, 
-}
-
-# --- Configurações Iniciais ---
-TITULO = "💬 Meu chat robô"
-DESCRICAO = "Este é um template de interface de chatbot. Substitua a função 'responder_chatbot' pela integração com seu modelo de linguagem (LLM)."
-
-# --- Função Principal de Resposta do Chatbot ---
-def responder_chatbot(mensagem, historico):
-
-    # O histórico do chat é ignorado neste código, mas vamos usá-lo para criar o prompt.
-    
-    # 1. Crie o prompt formatado
-    # O modelo Phi-3-mini-4k-instruct usa um formato de conversação específico.
-    messages = []
-    
-    # Adicione as mensagens do histórico, se houver
-    for user_msg, model_msg in historico:
-        if user_msg:
-            messages.append({"role": "user", "content": user_msg})
-        if model_msg:
-            messages.append({"role": "assistant", "content": model_msg})
-            
-    # Adicione a mensagem atual do usuário
-    messages.append({"role": "user", "content": mensagem})
-    
-    # Use o tokenizer para aplicar o formato correto
-    prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-
-    # === LÓGICA DO CHATBOT/MODELO CORRIGIDA ===
+def load_model():
+    """Baixa (se necessário) e carrega o modelo GGUF na memória."""
+    print(f"[*] Verificando cache ou baixando {FILENAME}...")
     try:
-        # AQUI É A CORREÇÃO: use **generation_args para passar os parâmetros como kwargs
-        # generator(prompt) aceita 1 argumento posicional (a prompt), 
-        # e o resto como argumentos nomeados (kwargs) desempacotados
-        output = generator(prompt, **generation_args)
+        model_path = hf_hub_download(repo_id=REPO_ID, filename=FILENAME)
+        print("[*] Carregando modelo via llama.cpp (Edge CPU Mode)...")
         
-        # O resultado é uma lista, onde o primeiro item é o dicionário de saída
-        resposta = output[0]['generated_text']
-
+        # Instancia o modelo priorizando threads da CPU
+        llm = Llama(
+            model_path=model_path,
+            n_ctx=CONTEXT_SIZE,
+            n_threads=os.cpu_count(),
+            verbose=False # Mantém o terminal limpo
+        )
+        return llm
     except Exception as e:
-        print(f"Erro ao chamar o modelo LLM: {e}")
-        resposta = "Desculpe, houve um erro ao gerar a resposta. Por favor, tente novamente."
+        print(f"[!] Erro ao carregar o modelo: {e}")
+        return None
 
-    return resposta
+# Inicializa o modelo globalmente
+llm = load_model()
 
-# --- Definição da Interface Gradio ---
+def get_memory_usage():
+    """Monitora o consumo de RAM (RSS) em tempo real."""
+    process = psutil.Process(os.getpid())
+    ram_mb = process.memory_info().rss / (1024 * 1024)
+    return f"⚡ **RAM Usage:** `{ram_mb:.2f} MB` | 🧠 **Model:** `Phi-3-Mini (Q4)` | ⚙️ **Compute:** `CPU Edge`"
 
-# O gr.ChatInterface é o componente mais recomendado para criar chatbots
-interface = gr.ChatInterface(
-    fn=responder_chatbot,  # A função Python que o chatbot irá chamar
-    title=TITULO,
-    description=DESCRICAO,
-    # Personalização dos botões
-    submit_btn="Enviar Mensagem",
-    # undo_btn="Desfazer Última Ação", # Removido pois não é um argumento válido
-    # clear_btn="Limpar Histórico", # Removido pois não é um argumento válido
-    # Exemplos para o usuário começar rapidamente
-    examples=[
-        ["O que é Gradio?"],
-        ["Qual a sua função principal?"],
-        ["Olá, bom dia!"]
-    ]
-)
+def generate_response(user_message, chat_history):
+    """Gera a resposta com streaming nativo e atualiza métricas de hardware."""
+    if not llm:
+        yield chat_history + [[user_message, "Erro crítico: Modelo não foi carregado."]], get_memory_usage()
+        return
 
-# --- Lançamento da Aplicação ---
+    # Atualiza a UI imediatamente com a mensagem do usuário
+    chat_history.append([user_message, ""])
+    yield chat_history, get_memory_usage()
 
-print("\nIniciando interface Gradio...")
-interface.launch(ssr_mode=False)
+    # Prepara o prompt no formato ChatML exigido pelo Phi-3
+    messages = []
+    for human, assistant in chat_history[:-1]:
+        messages.append({"role": "user", "content": human})
+        messages.append({"role": "assistant", "content": assistant})
+    messages.append({"role": "user", "content": user_message})
 
+    try:
+        # Inferência com streaming local
+        stream = llm.create_chat_completion(
+            messages=messages,
+            max_tokens=500,
+            temperature=0.1, # Foco em precisão técnica
+            stream=True
+        )
 
+        response_text = ""
+        for chunk in stream:
+            delta = chunk["choices"][0].get("delta", {})
+            if "content" in delta:
+                response_text += delta["content"]
+                chat_history[-1][1] = response_text
+                # Atualiza a UI token a token e reflete a RAM
+                yield chat_history, get_memory_usage()
+                
+    except Exception as e:
+        chat_history[-1][1] = f"**[Erro na Inferência]:** {str(e)}"
+        yield chat_history, get_memory_usage()
 
+# --- Gradio UI (Full-Stack) ---
+with gr.Blocks(theme=gr.themes.Base()) as interface:
+    gr.Markdown("# 🛡️ Edge AI Chatbot (100% Local & Private)")
+    
+    # Barra de status do hardware
+    hardware_monitor = gr.Markdown(value=get_memory_usage())
+    
+    chatbot = gr.Chatbot(height=550, bubble_full_width=False)
+    
+    with gr.Row():
+        msg_input = gr.Textbox(
+            show_label=False,
+            placeholder="Type your message here...",
+            scale=9
+        )
+        submit_btn = gr.Button("Send 🚀", variant="primary", scale=1)
 
+    # Eventos de submissão
+    submit_event = msg_input.submit(
+        fn=generate_response,
+        inputs=[msg_input, chatbot],
+        outputs=[chatbot, hardware_monitor]
+    )
+    submit_btn.click(
+        fn=generate_response,
+        inputs=[msg_input, chatbot],
+        outputs=[chatbot, hardware_monitor]
+    )
+    
+    # Limpa o input após o envio
+    submit_event.then(lambda: "", None, [msg_input])
+    submit_btn.click(lambda: "", None, [msg_input])
 
-
-
-
-
+if __name__ == "__main__":
+    if llm:
+        print("\n🚀 Iniciando servidor Gradio local...")
+        interface.launch(ssr_mode=False)
+    else:
+        print("Falha na inicialização. Verifique sua conexão para o download do modelo.")
