@@ -14,13 +14,21 @@ FILENAME = "qwen2.5-0.5b-instruct-q4_k_m.gguf"
 CONTEXT_SIZE = 1024
 MAX_RESPONSE_TOKENS = 300  # reduzido de 500: corta a cauda longa de tempo total
 
-# System prompt fixo: mantém o modelo respondendo em PT-BR e reforça o uso
-# do histórico da conversa (o modelo pequeno tende a "esquecer" contexto).
-SYSTEM_PROMPT = (
-    "Você é um assistente virtual que responde SEMPRE em português do Brasil, "
-    "de forma clara e direta. Preste muita atenção ao histórico da conversa: "
-    "use informações que o usuário já compartilhou (nome, contexto, "
-    "preferências) em vez de ignorá-las."
+# Prompt de especialização: nicho = dúvidas técnicas sobre o stack
+# Gradio, Hugging Face Spaces, CrewAI, MCP e execução local com llama.cpp/GGUF.
+# Inclui exemplos curtos (few-shot fixo no prompt, NÃO é RAG) para reforçar o
+# escopo e o padrão de recusa educada para perguntas fora do nicho.
+NICHE_SYSTEM_PROMPT = (
+    "Você é um assistente técnico especializado APENAS em: Gradio, Hugging "
+    "Face Spaces, CrewAI, Model Context Protocol (MCP) e execução de modelos "
+    "locais com llama.cpp/GGUF. Responda SEMPRE em português do Brasil, de "
+    "forma direta e objetiva.\n\n"
+    "Se a pergunta não for sobre esses temas, recuse educadamente e explique "
+    "que só pode ajudar com esses tópicos. Exemplo:\n"
+    "Pergunta: 'Qual a capital da França?'\n"
+    "Resposta: 'Isso foge do meu escopo - eu ajudo só com dúvidas sobre "
+    "Gradio, Hugging Face Spaces, CrewAI, MCP e llama.cpp. Posso ajudar com "
+    "algo nessas áreas?'"
 )
 
 def load_model():
@@ -94,9 +102,11 @@ def generate_response(user_message, chat_history):
     # quebra se 'content' não for string. Forçamos a conversão aqui.
     # Alguns chat templates de GGUF não tratam bem a role "system" (ex: o Phi-3
     # usado antes a ignorava). Por segurança, mantemos o workaround de embutir
-    # a instrução na primeira mensagem do usuário em vez de usar role="system".
+    # a instrução em mensagens do usuário em vez de usar role="system".
+    # Reforçamos o prompt de nicho em TODA mensagem do usuário (não só na
+    # primeira): um modelo tão pequeno tende a "esquecer" a instrução ao
+    # longo da conversa, e o texto mais recente pesa mais na geração.
     messages = []
-    system_injected = False
     for m in chat_history[:-1]:
         content = m.get("content", "")
         if isinstance(content, list):
@@ -105,9 +115,8 @@ def generate_response(user_message, chat_history):
                 for part in content
             )
         content = str(content)
-        if not system_injected and m["role"] == "user":
-            content = f"{SYSTEM_PROMPT}\n\n{content}"
-            system_injected = True
+        if m["role"] == "user":
+            content = f"{NICHE_SYSTEM_PROMPT}\n\nPergunta do usuário: {content}"
         messages.append({"role": m["role"], "content": content})
 
     try:
@@ -162,7 +171,7 @@ FADE_JS = """
 
 # --- Gradio UI (Full-Stack) ---
 with gr.Blocks(css=FADE_CSS) as interface:
-    gr.Markdown("# Edge AI Chatbot (100% Local & Private)")
+    gr.Markdown("# Assistente Técnico: Gradio, HF Spaces, CrewAI & MCP (100% Local)")
 
     hardware_monitor = gr.Markdown(value=get_memory_usage())
 
@@ -171,7 +180,7 @@ with gr.Blocks(css=FADE_CSS) as interface:
     with gr.Row():
         msg_input = gr.Textbox(
             show_label=False,
-            placeholder="Type your message here...",
+            placeholder="Pergunte sobre Gradio, Hugging Face Spaces, CrewAI, MCP ou llama.cpp...",
             scale=9,
             elem_id="msg_input"
         )

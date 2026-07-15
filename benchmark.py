@@ -30,40 +30,51 @@ FILENAME = "qwen2.5-0.5b-instruct-q4_k_m.gguf"
 CONTEXT_SIZE = 1024
 MAX_RESPONSE_TOKENS = 300  # reduzido de 500: corta a cauda longa de tempo total
 
-SYSTEM_PROMPT = (
-    "Você é um assistente virtual que responde SEMPRE em português do Brasil, "
-    "de forma clara e direta. Preste muita atenção ao histórico da conversa: "
-    "use informações que o usuário já compartilhou (nome, contexto, "
-    "preferências) em vez de ignorá-las."
+# Prompt de especialização: nicho = dúvidas técnicas sobre o stack
+# Gradio, Hugging Face Spaces, CrewAI, MCP e execução local com llama.cpp/GGUF.
+# Inclui exemplos curtos (few-shot fixo no prompt, NÃO é RAG) para reforçar o
+# escopo e o padrão de recusa educada para perguntas fora do nicho.
+NICHE_SYSTEM_PROMPT = (
+    "Você é um assistente técnico especializado APENAS em: Gradio, Hugging "
+    "Face Spaces, CrewAI, Model Context Protocol (MCP) e execução de modelos "
+    "locais com llama.cpp/GGUF. Responda SEMPRE em português do Brasil, de "
+    "forma direta e objetiva.\n\n"
+    "Se a pergunta não for sobre esses temas, recuse educadamente e explique "
+    "que só pode ajudar com esses tópicos. Exemplo:\n"
+    "Pergunta: 'Qual a capital da França?'\n"
+    "Resposta: 'Isso foge do meu escopo - eu ajudo só com dúvidas sobre "
+    "Gradio, Hugging Face Spaces, CrewAI, MCP e llama.cpp. Posso ajudar com "
+    "algo nessas áreas?'"
 )
 
 # --- Bateria de testes ---
 # Cada item é uma "conversa": uma lista de mensagens do usuário enviadas
 # em sequência (permite testar memória de contexto multi-turn).
+# Focada no nicho: Gradio, HF Spaces, CrewAI, MCP, llama.cpp/GGUF.
 TEST_CASES = [
     {
         "id": "sanity_1",
-        "category": "Sanidade básica",
-        "turns": ["Olá, quem é você e o que você pode fazer?"],
+        "category": "Sanidade básica (nicho)",
+        "turns": ["O que é o Gradio e pra que ele serve?"],
     },
     {
         "id": "sanity_2",
-        "category": "Sanidade básica",
-        "turns": ["Me explique o que é machine learning em 3 frases."],
+        "category": "Sanidade básica (nicho)",
+        "turns": ["Explique rapidamente o que é o Model Context Protocol (MCP)."],
     },
     {
         "id": "memory_1",
         "category": "Memória de contexto",
         "turns": [
-            "Meu nome é Chefia e eu trabalho com IA.",
-            "Qual é o meu nome e minha área de trabalho?",
+            "Estou construindo um app com CrewAI e Gradio.",
+            "Quais duas ferramentas eu mencionei que estou usando?",
         ],
     },
     {
         "id": "long_response",
         "category": "Streaming / resposta longa",
         "turns": [
-            "Liste 10 passos para treinar um modelo de deep learning do zero."
+            "Explique os principais componentes de um agente no CrewAI."
         ],
     },
     {
@@ -84,7 +95,7 @@ TEST_CASES = [
     },
     {
         "id": "reasoning",
-        "category": "Raciocínio",
+        "category": "Raciocínio (fora do nicho, mede teto de capacidade)",
         "turns": [
             "Se hoje é quarta-feira e faltam 10 dias para uma reunião, em que "
             "dia da semana ela vai cair?"
@@ -92,18 +103,23 @@ TEST_CASES = [
     },
     {
         "id": "code",
-        "category": "Código",
-        "turns": ["Escreva uma função em Python que verifica se um número é primo."],
+        "category": "Código (dentro do nicho)",
+        "turns": ["Como eu crio uma interface de chat simples com Gradio?"],
     },
     {
         "id": "lang_pt",
         "category": "Português vs inglês (PT)",
-        "turns": ["Explique rapidamente o que é uma rede neural convolucional."],
+        "turns": ["O que é llama.cpp e como ele usa arquivos GGUF?"],
     },
     {
         "id": "lang_en",
         "category": "Português vs inglês (EN)",
-        "turns": ["Briefly explain what a convolutional neural network is."],
+        "turns": ["Briefly explain what MCP (Model Context Protocol) is."],
+    },
+    {
+        "id": "off_topic",
+        "category": "TESTE CRÍTICO: recusa fora do escopo",
+        "turns": ["Qual é a capital da França?"],
     },
     {
         "id": "edge_empty",
@@ -185,13 +201,12 @@ def run_benchmark(llm, test_cases):
 
     for case in test_cases:
         # O chat template deste GGUF ignora a role "system"; embutimos a
-        # instrução na primeira mensagem do usuário como workaround.
+        # instrução em toda mensagem do usuário (não só na primeira) para
+        # reduzir o risco do modelo "esquecer" o escopo do nicho ao longo
+        # da conversa.
         history = []
         for turn_idx, user_message in enumerate(case["turns"], start=1):
-            if turn_idx == 1:
-                user_message_for_model = f"{SYSTEM_PROMPT}\n\n{user_message}"
-            else:
-                user_message_for_model = user_message
+            user_message_for_model = f"{NICHE_SYSTEM_PROMPT}\n\nPergunta do usuário: {user_message}"
             history.append({"role": "user", "content": user_message_for_model})
             ram_before = get_ram_mb()
 
@@ -238,7 +253,7 @@ def run_batch_sweep(batch_values, prompt=None):
     for n_batch in batch_values:
         print(f"\n{'='*70}\nTestando n_batch={n_batch}\n{'='*70}")
         llm = load_model(n_batch=n_batch)
-        messages = [{"role": "user", "content": f"{SYSTEM_PROMPT}\n\n{prompt}"}]
+        messages = [{"role": "user", "content": f"{NICHE_SYSTEM_PROMPT}\n\nPergunta do usuário: {prompt}"}]
         result = run_turn(llm, messages)
         sweep_records.append({
             "n_batch": n_batch,
