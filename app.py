@@ -51,7 +51,18 @@ def generate_response(user_message, chat_history):
 
     # Prepara o prompt no formato ChatML exigido pelo Phi-3
     # (usa o histórico inteiro, exceto o placeholder vazio recém-adicionado)
-    messages = chat_history[:-1]
+    # Sanitiza: o Gradio pode devolver 'content' como lista/estrutura em vez de
+    # string pura (ex: mensagens já renderizadas com markdown), e o llama-cpp-python
+    # quebra se 'content' não for string. Forçamos a conversão aqui.
+    messages = []
+    for m in chat_history[:-1]:
+        content = m.get("content", "")
+        if isinstance(content, list):
+            content = "".join(
+                part.get("text", "") if isinstance(part, dict) else str(part)
+                for part in content
+            )
+        messages.append({"role": m["role"], "content": str(content)})
 
     try:
         stream = llm.create_chat_completion(
