@@ -84,7 +84,7 @@ with gr.Blocks() as interface:
     # Barra de status do hardware
     hardware_monitor = gr.Markdown(value=get_memory_usage())
     
-    chatbot = gr.Chatbot(height=550, type="tuples")
+    chatbot = gr.Chatbot(height=550)
     
     with gr.Row():
         msg_input = gr.Textbox(
