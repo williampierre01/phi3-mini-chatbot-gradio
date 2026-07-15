@@ -4,48 +4,69 @@ import psutil
 import gradio as gr
 from huggingface_hub import hf_hub_download
 from llama_cpp import Llama
- 
+
 # --- Configuration ---
 REPO_ID = "microsoft/Phi-3-mini-4k-instruct-gguf"
 FILENAME = "Phi-3-mini-4k-instruct-q4.gguf"
 CONTEXT_SIZE = 1024
- 
+
+# System prompt fixo: mantém o modelo respondendo em PT-BR e reforça o uso
+# do histórico da conversa (o modelo pequeno tende a "esquecer" contexto).
+SYSTEM_PROMPT = (
+    "Você é um assistente virtual que responde SEMPRE em português do Brasil, "
+    "de forma clara e direta. Preste muita atenção ao histórico da conversa: "
+    "use informações que o usuário já compartilhou (nome, contexto, "
+    "preferências) em vez de ignorá-las."
+)
+
 def load_model():
     """Baixa (se necessário) e carrega o modelo GGUF na memória."""
     print(f"[*] Verificando cache ou baixando {FILENAME}...")
     try:
         model_path = hf_hub_download(repo_id=REPO_ID, filename=FILENAME)
         print("[*] Carregando modelo via llama.cpp (Edge CPU Mode)...")
- 
+
         llm = Llama(
             model_path=model_path,
             n_ctx=CONTEXT_SIZE,
-            n_threads=2,
-            n_batch=128,
+            n_threads=2,   # Codespace tem só 2 cores (nproc=2) - manter em 2
+            n_batch=256,   # aumentado de 128 para acelerar o prefill de prompts longos
             verbose=False
         )
+
+        # Warm-up: primeira inferência costuma ser bem mais lenta (cache/mmap
+        # "frios"). Roda uma geração descartável de 1 token aqui, na
+        # inicialização, para não distorcer o TTFT da primeira pergunta real.
+        print("[*] Aquecendo o modelo (warm-up)...")
+        list(llm.create_chat_completion(
+            messages=[{"role": "user", "content": "oi"}],
+            max_tokens=1,
+            stream=False,
+        ))
+        print("[*] Warm-up concluído.")
+
         return llm
     except Exception as e:
         print(f"[!] Erro ao carregar o modelo: {e}")
         return None
- 
+
 llm = load_model()
- 
+
 def get_memory_usage(ttft=None, total_time=None, tokens=None):
     """Monitora o consumo de RAM (RSS) e, opcionalmente, métricas de tempo/velocidade."""
     process = psutil.Process(os.getpid())
     ram_mb = process.memory_info().rss / (1024 * 1024)
     base = f" **RAM Usage:** `{ram_mb:.2f} MB` |  **Model:** `Phi-3-Mini (Q4)` |  **Compute:** `CPU Edge`"
- 
+
     if ttft is not None:
         base += f" |  **1º token:** `{ttft:.2f}s`"
     if total_time is not None:
         base += f" |  **Tempo total:** `{total_time:.2f}s`"
     if tokens is not None and total_time and total_time > 0:
         base += f" |  **Vel.:** `{tokens/total_time:.1f} tok/s`"
- 
+
     return base
- 
+
 def generate_response(user_message, chat_history):
     """Gera a resposta com streaming nativo, usando o formato 'messages' do Gradio."""
     if not llm:
@@ -53,18 +74,18 @@ def generate_response(user_message, chat_history):
         chat_history.append({"role": "assistant", "content": "Erro crítico: Modelo não foi carregado."})
         yield chat_history, get_memory_usage()
         return
- 
+
     # Adiciona a mensagem do usuário e um placeholder vazio pro assistente
     chat_history.append({"role": "user", "content": user_message})
     chat_history.append({"role": "assistant", "content": ""})
     yield chat_history, get_memory_usage()
- 
+
     # Prepara o prompt no formato ChatML exigido pelo Phi-3
     # (usa o histórico inteiro, exceto o placeholder vazio recém-adicionado)
     # Sanitiza: o Gradio pode devolver 'content' como lista/estrutura em vez de
     # string pura (ex: mensagens já renderizadas com markdown), e o llama-cpp-python
     # quebra se 'content' não for string. Forçamos a conversão aqui.
-    messages = []
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
     for m in chat_history[:-1]:
         content = m.get("content", "")
         if isinstance(content, list):
@@ -73,48 +94,48 @@ def generate_response(user_message, chat_history):
                 for part in content
             )
         messages.append({"role": m["role"], "content": str(content)})
- 
+
     try:
         start_time = time.time()
         first_token_time = None
         token_count = 0
- 
+
         stream = llm.create_chat_completion(
             messages=messages,
             max_tokens=500,
             temperature=0.1,
             stream=True
         )
- 
+
         response_text = ""
         for chunk in stream:
             delta = chunk["choices"][0].get("delta", {})
             if "content" in delta:
                 if first_token_time is None:
                     first_token_time = time.time() - start_time
- 
+
                 response_text += delta["content"]
                 token_count += 1
                 chat_history[-1]["content"] = response_text
- 
+
                 elapsed = time.time() - start_time
                 yield chat_history, get_memory_usage(ttft=first_token_time, total_time=elapsed, tokens=token_count)
- 
+
         # Marca final com o tempo total definitivo
         total_time = time.time() - start_time
         yield chat_history, get_memory_usage(ttft=first_token_time, total_time=total_time, tokens=token_count)
- 
+
     except Exception as e:
         chat_history[-1]["content"] = f"**[Erro na Inferência]:** {str(e)}"
         yield chat_history, get_memory_usage()
- 
+
 # --- Efeito visual: fade suave no campo de texto ao enviar ---
 FADE_CSS = """
 #msg_input textarea {
     transition: opacity 0.25s ease;
 }
 """
- 
+
 FADE_JS = """
 () => {
     const ta = document.querySelector('#msg_input textarea');
@@ -123,15 +144,15 @@ FADE_JS = """
     }
 }
 """
- 
+
 # --- Gradio UI (Full-Stack) ---
 with gr.Blocks(css=FADE_CSS) as interface:
     gr.Markdown("# Edge AI Chatbot (100% Local & Private)")
- 
+
     hardware_monitor = gr.Markdown(value=get_memory_usage())
- 
+
     chatbot = gr.Chatbot(height=550)
- 
+
     with gr.Row():
         msg_input = gr.Textbox(
             show_label=False,
@@ -140,7 +161,7 @@ with gr.Blocks(css=FADE_CSS) as interface:
             elem_id="msg_input"
         )
         submit_btn = gr.Button("Send", variant="primary", scale=1)
- 
+
     submit_event = msg_input.submit(
         fn=generate_response,
         inputs=[msg_input, chatbot],
@@ -151,12 +172,12 @@ with gr.Blocks(css=FADE_CSS) as interface:
         inputs=[msg_input, chatbot],
         outputs=[chatbot, hardware_monitor]
     )
- 
+
     # Efeito de fade: listener independente, sem 'fn', só JS puro.
     # Fica separado da chamada acima para não sobrescrever os inputs de generate_response.
     msg_input.submit(fn=None, inputs=None, outputs=None, js=FADE_JS)
     submit_btn.click(fn=None, inputs=None, outputs=None, js=FADE_JS)
- 
+
     # Limpa o texto e restaura a opacidade (fade-in) após o envio
     submit_event.then(lambda: "", None, [msg_input]).then(
         lambda: None, None, None,
@@ -166,7 +187,7 @@ with gr.Blocks(css=FADE_CSS) as interface:
         lambda: None, None, None,
         js="() => { const ta = document.querySelector('#msg_input textarea'); if (ta) ta.style.opacity = '1'; }"
     )
- 
+
 if __name__ == "__main__":
     if llm:
         print("\n Iniciando servidor Gradio local...")

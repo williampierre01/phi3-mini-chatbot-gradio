@@ -25,6 +25,13 @@ REPO_ID = "microsoft/Phi-3-mini-4k-instruct-gguf"
 FILENAME = "Phi-3-mini-4k-instruct-q4.gguf"
 CONTEXT_SIZE = 1024
 
+SYSTEM_PROMPT = (
+    "Você é um assistente virtual que responde SEMPRE em português do Brasil, "
+    "de forma clara e direta. Preste muita atenção ao histórico da conversa: "
+    "use informações que o usuário já compartilhou (nome, contexto, "
+    "preferências) em vez de ignorá-las."
+)
+
 # --- Bateria de testes ---
 # Cada item é uma "conversa": uma lista de mensagens do usuário enviadas
 # em sequência (permite testar memória de contexto multi-turn).
@@ -105,13 +112,23 @@ def load_model():
     print(f"[*] Verificando cache ou baixando {FILENAME}...")
     model_path = hf_hub_download(repo_id=REPO_ID, filename=FILENAME)
     print("[*] Carregando modelo via llama.cpp (Edge CPU Mode)...")
-    return Llama(
+    llm = Llama(
         model_path=model_path,
         n_ctx=CONTEXT_SIZE,
-        n_threads=2,
-        n_batch=128,
+        n_threads=2,   # Codespace tem só 2 cores (nproc=2) - manter em 2
+        n_batch=256,   # aumentado de 128 para acelerar o prefill de prompts longos
         verbose=False,
     )
+
+    print("[*] Aquecendo o modelo (warm-up)...")
+    list(llm.create_chat_completion(
+        messages=[{"role": "user", "content": "oi"}],
+        max_tokens=1,
+        stream=False,
+    ))
+    print("[*] Warm-up concluído.\n")
+
+    return llm
 
 
 def get_ram_mb():
@@ -159,7 +176,7 @@ def run_benchmark(llm, test_cases):
     records = []
 
     for case in test_cases:
-        history = []
+        history = [{"role": "system", "content": SYSTEM_PROMPT}]
         for turn_idx, user_message in enumerate(case["turns"], start=1):
             history.append({"role": "user", "content": user_message})
             ram_before = get_ram_mb()
