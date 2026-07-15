@@ -7,7 +7,7 @@ from llama_cpp import Llama
 # --- Configuration ---
 REPO_ID = "microsoft/Phi-3-mini-4k-instruct-gguf"
 FILENAME = "Phi-3-mini-4k-instruct-q4.gguf"
-CONTEXT_SIZE = 4096
+CONTEXT_SIZE = 1024
 
 def load_model():
     """Baixa (se necessário) e carrega o modelo GGUF na memória."""
@@ -20,7 +20,8 @@ def load_model():
         llm = Llama(
             model_path=model_path,
             n_ctx=CONTEXT_SIZE,
-            n_threads=os.cpu_count(),
+            n_threads=2,
+            n_batch=256,
             verbose=False # Mantém o terminal limpo
         )
         return llm
