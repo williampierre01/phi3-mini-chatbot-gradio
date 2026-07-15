@@ -30,7 +30,7 @@ def load_model():
             model_path=model_path,
             n_ctx=CONTEXT_SIZE,
             n_threads=2,   # Codespace tem só 2 cores (nproc=2) - manter em 2
-            n_batch=256,   # aumentado de 128 para acelerar o prefill de prompts longos
+            n_batch=128,   # revertido: 256 piorou o throughput (overhead sem ganho com só 2 threads)
             verbose=False
         )
 
@@ -85,7 +85,11 @@ def generate_response(user_message, chat_history):
     # Sanitiza: o Gradio pode devolver 'content' como lista/estrutura em vez de
     # string pura (ex: mensagens já renderizadas com markdown), e o llama-cpp-python
     # quebra se 'content' não for string. Forçamos a conversão aqui.
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    # O chat template deste GGUF (Phi-3-mini-4k-instruct-q4.gguf) NÃO trata a
+    # role "system" corretamente - ela é ignorada na formatação do prompt.
+    # Workaround: embutir a instrução dentro da primeira mensagem do usuário.
+    messages = []
+    system_injected = False
     for m in chat_history[:-1]:
         content = m.get("content", "")
         if isinstance(content, list):
@@ -93,7 +97,11 @@ def generate_response(user_message, chat_history):
                 part.get("text", "") if isinstance(part, dict) else str(part)
                 for part in content
             )
-        messages.append({"role": m["role"], "content": str(content)})
+        content = str(content)
+        if not system_injected and m["role"] == "user":
+            content = f"{SYSTEM_PROMPT}\n\n{content}"
+            system_injected = True
+        messages.append({"role": m["role"], "content": content})
 
     try:
         start_time = time.time()

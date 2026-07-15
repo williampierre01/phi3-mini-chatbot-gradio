@@ -116,7 +116,7 @@ def load_model():
         model_path=model_path,
         n_ctx=CONTEXT_SIZE,
         n_threads=2,   # Codespace tem só 2 cores (nproc=2) - manter em 2
-        n_batch=256,   # aumentado de 128 para acelerar o prefill de prompts longos
+        n_batch=128,   # revertido: 256 piorou o throughput (overhead sem ganho com só 2 threads)
         verbose=False,
     )
 
@@ -176,9 +176,15 @@ def run_benchmark(llm, test_cases):
     records = []
 
     for case in test_cases:
-        history = [{"role": "system", "content": SYSTEM_PROMPT}]
+        # O chat template deste GGUF ignora a role "system"; embutimos a
+        # instrução na primeira mensagem do usuário como workaround.
+        history = []
         for turn_idx, user_message in enumerate(case["turns"], start=1):
-            history.append({"role": "user", "content": user_message})
+            if turn_idx == 1:
+                user_message_for_model = f"{SYSTEM_PROMPT}\n\n{user_message}"
+            else:
+                user_message_for_model = user_message
+            history.append({"role": "user", "content": user_message_for_model})
             ram_before = get_ram_mb()
 
             print(f"\n[{case['id']} | turno {turn_idx}] Pergunta: {user_message[:80]}")
