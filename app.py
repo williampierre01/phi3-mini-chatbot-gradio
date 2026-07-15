@@ -36,7 +36,7 @@ def get_memory_usage():
     """Monitora o consumo de RAM (RSS) em tempo real."""
     process = psutil.Process(os.getpid())
     ram_mb = process.memory_info().rss / (1024 * 1024)
-    return f"⚡ **RAM Usage:** `{ram_mb:.2f} MB` | 🧠 **Model:** `Phi-3-Mini (Q4)` | ⚙️ **Compute:** `CPU Edge`"
+    return f" **RAM Usage:** `{ram_mb:.2f} MB` |  **Model:** `Phi-3-Mini (Q4)` |  **Compute:** `CPU Edge`"
 
 def generate_response(user_message, chat_history):
     """Gera a resposta com streaming nativo e atualiza métricas de hardware."""
@@ -79,7 +79,7 @@ def generate_response(user_message, chat_history):
 
 # --- Gradio UI (Full-Stack) ---
 with gr.Blocks() as interface:
-    gr.Markdown("# 🛡️ Edge AI Chatbot (100% Local & Private)")
+    gr.Markdown("# Edge AI Chatbot (100% Local & Private)")
     
     # Barra de status do hardware
     hardware_monitor = gr.Markdown(value=get_memory_usage())
@@ -92,7 +92,7 @@ with gr.Blocks() as interface:
             placeholder="Type your message here...",
             scale=9
         )
-        submit_btn = gr.Button("Send 🚀", variant="primary", scale=1)
+        submit_btn = gr.Button("Send", variant="primary", scale=1)
 
     # Eventos de submissão
     submit_event = msg_input.submit(
@@ -112,7 +112,7 @@ with gr.Blocks() as interface:
 
 if __name__ == "__main__":
     if llm:
-        print("\n🚀 Iniciando servidor Gradio local...")
+        print("\n Iniciando servidor Gradio local...")
         interface.launch(ssr_mode=False)
     else:
         print("Falha na inicialização. Verifique sua conexão para o download do modelo.")
