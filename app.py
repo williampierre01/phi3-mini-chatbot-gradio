@@ -6,10 +6,11 @@ from huggingface_hub import hf_hub_download
 from llama_cpp import Llama
 
 # --- Configuration ---
-# Trocado de Phi-3-mini (3.8B) para Qwen2.5-1.5B-Instruct: ~2.5x menor,
-# multilíngue com suporte declarado a português, e mais leve para CPU de 2 cores.
-REPO_ID = "Qwen/Qwen2.5-1.5B-Instruct-GGUF"
-FILENAME = "qwen2.5-1.5b-instruct-q4_k_m.gguf"
+# Trocado de Qwen2.5-1.5B para Qwen2.5-0.5B-Instruct: metade do tamanho,
+# priorizando velocidade máxima. A especialização de nicho (próxima etapa)
+# deve compensar boa parte da perda de conhecimento geral de um modelo tão pequeno.
+REPO_ID = "Qwen/Qwen2.5-0.5B-Instruct-GGUF"
+FILENAME = "qwen2.5-0.5b-instruct-q4_k_m.gguf"
 CONTEXT_SIZE = 1024
 MAX_RESPONSE_TOKENS = 300  # reduzido de 500: corta a cauda longa de tempo total
 
@@ -36,6 +37,7 @@ def load_model():
             n_threads_batch=2,   # garante que o prefill do prompt também usa os 2 cores
             n_batch=128,         # 256 piorou o throughput (overhead sem ganho com só 2 threads)
             use_mlock=True,      # trava o modelo em RAM, evita swap e picos de latência
+            flash_attn=True,     # reduz movimentação de dados durante a atenção (1.3x-2x em prompts longos)
             verbose=False
         )
 
@@ -61,7 +63,7 @@ def get_memory_usage(ttft=None, total_time=None, tokens=None):
     """Monitora o consumo de RAM (RSS) e, opcionalmente, métricas de tempo/velocidade."""
     process = psutil.Process(os.getpid())
     ram_mb = process.memory_info().rss / (1024 * 1024)
-    base = f" **RAM Usage:** `{ram_mb:.2f} MB` |  **Model:** `Qwen2.5-1.5B (Q4)` |  **Compute:** `CPU Edge`"
+    base = f" **RAM Usage:** `{ram_mb:.2f} MB` |  **Model:** `Qwen2.5-0.5B (Q4)` |  **Compute:** `CPU Edge`"
 
     if ttft is not None:
         base += f" |  **1º token:** `{ttft:.2f}s`"

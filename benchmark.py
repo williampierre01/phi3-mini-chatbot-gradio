@@ -22,10 +22,11 @@ from huggingface_hub import hf_hub_download
 from llama_cpp import Llama
 
 # --- Configuração (mesma do app.py) ---
-# Trocado de Phi-3-mini (3.8B) para Qwen2.5-1.5B-Instruct: ~2.5x menor,
-# multilíngue com suporte declarado a português, e mais leve para CPU de 2 cores.
-REPO_ID = "Qwen/Qwen2.5-1.5B-Instruct-GGUF"
-FILENAME = "qwen2.5-1.5b-instruct-q4_k_m.gguf"
+# Trocado de Qwen2.5-1.5B para Qwen2.5-0.5B-Instruct: metade do tamanho,
+# priorizando velocidade máxima. A especialização de nicho (próxima etapa)
+# deve compensar boa parte da perda de conhecimento geral de um modelo tão pequeno.
+REPO_ID = "Qwen/Qwen2.5-0.5B-Instruct-GGUF"
+FILENAME = "qwen2.5-0.5b-instruct-q4_k_m.gguf"
 CONTEXT_SIZE = 1024
 MAX_RESPONSE_TOKENS = 300  # reduzido de 500: corta a cauda longa de tempo total
 
@@ -123,6 +124,7 @@ def load_model(n_batch=128):
         n_threads_batch=2,   # garante que o prefill do prompt também usa os 2 cores
         n_batch=n_batch,
         use_mlock=True,      # trava o modelo em RAM, evita swap e picos de latência
+        flash_attn=True,     # reduz movimentação de dados durante a atenção (1.3x-2x em prompts longos)
         verbose=False,
     )
 
