@@ -1,4 +1,14 @@
-gradio>=4.40.0
+# Interface web. Fixado em >=6.0 porque o app.py já usa o formato "messages"
+# do gr.Chatbot (sem o parâmetro `type`, removido a partir da v6 do Gradio).
+# Se for reinstalar do zero, confirme a versão real com `pip show gradio`.
+gradio>=6.0.0
+ 
+# Inferência local via llama.cpp (bindings Python)
 llama-cpp-python>=0.2.90
+ 
+# Download/cache do modelo GGUF no Hugging Face Hub
 huggingface-hub>=0.24.0
+ 
+# Monitoramento de RAM (usado em app.py e benchmark.py)
 psutil>=6.0.0
+ 
